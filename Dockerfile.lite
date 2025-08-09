@@ -16,10 +16,10 @@ RUN wget -O premake.zip https://github.com/premake/premake-core/releases/downloa
 FROM node:16-bullseye-slim
 LABEL Author="Nanahira <nanahira@momobako.com>"
 
-# Install only the absolute essential build tools.
-# CRITICAL: We add libssl-dev ONLY to satisfy the configure script check.
+# Install essential build tools, including those needed for static dependencies.
+# FIX: Added libreadline-dev and libncurses-dev to fix Lua compilation.
 RUN apt update && \
-    env DEBIAN_FRONTEND=noninteractive apt install -y wget git build-essential p7zip-full python3 python-is-python3 libssl-dev && \
+    env DEBIAN_FRONTEND=noninteractive apt install -y wget git build-essential p7zip-full python3 python-is-python3 libssl-dev libreadline-dev libncurses-dev && \
     rm -rf /var/lib/apt/lists/*
 
 # Copy application source and install node modules
@@ -44,7 +44,6 @@ RUN git clone --branch=server --recursive --depth=1 https://github.com/GuangDai/
 RUN wget -O libevent.tar.gz https://github.com/libevent/libevent/releases/download/release-2.1.12-stable/libevent-2.1.12-stable.tar.gz && \
     tar xf libevent.tar.gz && \
     cd libevent-2.1.12-stable && \
-    # FIX: Add --disable-openssl to prevent linking against it.
     ./configure --disable-shared --enable-static --disable-openssl --prefix=/usr/local && \
     make -j$(nproc) && make install && \
     cd .. && rm -rf libevent*
@@ -53,7 +52,8 @@ RUN wget -O libevent.tar.gz https://github.com/libevent/libevent/releases/downlo
 RUN wget -O lua.tar.gz https://www.lua.org/ftp/lua-5.3.6.tar.gz && \
     tar zxf lua.tar.gz && \
     cd lua-5.3.6 && \
-    make linux MYCFLAGS="-fPIC" && make install && \
+    # FIX: Use 'make generic' for a more robust, non-interactive build suitable for embedding.
+    make generic MYCFLAGS="-fPIC" && make install && \
     cd .. && rm -rf lua*
 
 # Build sqlite3
@@ -67,7 +67,8 @@ RUN wget -O sqlite.zip https://www.sqlite.org/2022/sqlite-amalgamation-3390400.z
     cd .. && rm -rf sqlite*
 
 # --- Now, build the main ygopro application ---
-RUN premake5 gmake --lua-deb && \
+# FIX: Removed '--lua-deb' to ensure premake uses our self-compiled static Lua library.
+RUN premake5 gmake && \
     cd build && \
     # ===================================================================
     # CRITICAL FIX:

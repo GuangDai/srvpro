@@ -1,0 +1,146 @@
+name: Docker Publish
+
+# 工作流触发条件
+on:
+  push:
+    branches:
+      - '**' # 任何分支的推送
+    tags:
+      - 'v*.*.*' # 版本标签的推送
+  pull_request:
+    branches:
+      - 'master' # 针对 master 分支的 PR
+
+# 环境变量，定义你的 Docker Hub 镜像名称
+env:
+  DOCKER_IMAGE: ${{ secrets.DOCKERHUB_USERNAME }}/${{ github.event.repository.name }}
+
+jobs:
+  # --- 构建任务 ---
+  # 这个任务会为 amd64 和 arm64 构建 lite 和 full 两个镜像
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # 定义构建矩阵，对应 GitLab 中的 x86 和 arm
+        platform: [linux/amd64, linux/arm64]
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up QEMU
+        # 设置 QEMU 以支持跨平台构建 (例如在 x86 runner 上构建 arm64 镜像)
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        # 设置 Buildx，这是 Docker 先进的构建引擎
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to Docker Hub
+        # 登录到 Docker Hub，需要用到下面会解释的 secrets
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Extract Docker metadata and generate tags
+        # 提取元数据并生成所有需要的标签
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.DOCKER_IMAGE }}
+          tags: |
+            # 为每个分支或 tag 生成一个 slug 格式的标签
+            type=ref,event=branch,suffix=-{{replace 'linux/' '' matrix.platform}}-lite,enable={{ !startsWith(github.ref, 'refs/tags/') }}
+            type=ref,event=branch,suffix=-{{replace 'linux/' '' matrix.platform}}-full,enable={{ !startsWith(github.ref, 'refs/tags/') }}
+            type=ref,event=tag,suffix=-{{replace 'linux/' '' matrix.platform}}-lite
+            type=ref,event=tag,suffix=-{{replace 'linux/' '' matrix.platform}}-full
+
+      - name: Build and push 'lite' image
+        # 构建并推送 lite 镜像
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./Dockerfile.lite
+          platforms: ${{ matrix.platform }}
+          push: true
+          # 使用上一步生成的标签
+          tags: ${{ steps.meta.outputs.tags_lite }}
+          # 启用缓存以加快后续构建速度
+          cache-from: type=registry,ref=${{ env.DOCKER_IMAGE }}:${{replace 'linux/' '' matrix.platform}}-lite-buildcache
+          cache-to: type=registry,ref=${{ env.DOCKER_IMAGE }}:${{replace 'linux/' '' matrix.platform}}-lite-buildcache,mode=max
+
+      - name: Build and push 'full' image
+        # 构建并推送 full 镜像
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./Dockerfile
+          platforms: ${{ matrix.platform }}
+          # 这里是关键，通过 build-arg 传入 lite 镜像的地址
+          build-args: |
+            BASE_IMAGE=${{ env.DOCKER_IMAGE }}:${{ github.ref_name }}-${{replace 'linux/' '' matrix.platform}}-lite
+          push: true
+          # 使用上一步生成的标签
+          tags: ${{ steps.meta.outputs.tags_full }}
+          cache-from: type=registry,ref=${{ env.DOCKER_IMAGE }}:${{replace 'linux/' '' matrix.platform}}-full-buildcache
+          cache-to: type=registry,ref=${{ env.DOCKER_IMAGE }}:${{replace 'linux/' '' matrix.platform}}-full-buildcache,mode=max
+
+  # --- 部署任务 ---
+  # 这个任务会在 build 成功后，创建并推送多架构 manifest
+  deploy:
+    runs-on: ubuntu-latest
+    # 依赖 build 任务，必须等 build 任务成功完成后才执行
+    needs: build
+    
+    steps:
+      - name: Login to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Get branch/tag name
+        # 获取一个干净的分支或标签名，用于组合镜像标签
+        id: get_name
+        run: echo "ref_name=$(echo ${{ github.ref_name }} | sed -e 's/[^a-zA-Z0-9.-]/-/g')" >> $GITHUB_ENV
+
+      - name: Create and push 'lite' manifest
+        # 创建并推送 lite 版本的 manifest
+        run: |
+          docker manifest create ${{ env.DOCKER_IMAGE }}:${{ env.ref_name }}-lite \
+            ${{ env.DOCKER_IMAGE }}:${{ env.ref_name }}-amd64-lite \
+            ${{ env.DOCKER_IMAGE }}:${{ env.ref_name }}-arm64-lite
+          docker manifest push ${{ env.DOCKER_IMAGE }}:${{ env.ref_name }}-lite
+
+      - name: Create and push 'full' & branch manifest
+        # 创建并推送 full 版本的 manifest，同时打上分支名标签
+        run: |
+          docker manifest create ${{ env.DOCKER_IMAGE }}:${{ env.ref_name }}-full \
+            ${{ env.DOCKER_IMAGE }}:${{ env.ref_name }}-amd64-full \
+            ${{ env.DOCKER_IMAGE }}:${{ env.ref_name }}-arm64-full
+          docker manifest push ${{ env.DOCKER_IMAGE }}:${{ env.ref_name }}-full
+          # 添加一个不带 -full 后缀的标签，对应原版的 deploy_branch
+          docker manifest push ${{ env.DOCKER_IMAGE }}:${{ env.ref_name }}
+
+      - name: Create and push 'latest-lite' manifest
+        # 如果是 master 分支，创建并推送 'lite' 标签
+        if: github.ref == 'refs/heads/master'
+        run: |
+          docker manifest create ${{ env.DOCKER_IMAGE }}:lite \
+            ${{ env.DOCKER_IMAGE }}:${{ env.ref_name }}-amd64-lite \
+            ${{ env.DOCKER_IMAGE }}:${{ env.ref_name }}-arm64-lite
+          docker manifest push ${{ env.DOCKER_IMAGE }}:lite
+
+      - name: Create and push 'latest-full' & 'latest' manifest
+        # 如果是 master 分支，创建并推送 'full' 和 'latest' 标签
+        if: github.ref == 'refs/heads/master'
+        run: |
+          docker manifest create ${{ env.DOCKER_IMAGE }}:full \
+            ${{ env.DOCKER_IMAGE }}:${{ env.ref_name }}-amd64-full \
+            ${{ env.DOCKER_IMAGE }}:${{ env.ref_name }}-arm64-full
+          docker manifest push ${{ env.DOCKER_IMAGE }}:full
+          # latest 标签指向 full 版本
+          docker manifest push ${{ env.DOCKER_IMAGE }}:latest

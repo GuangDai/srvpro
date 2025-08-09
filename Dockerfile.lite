@@ -1,14 +1,20 @@
-# Dockerfile - Ultimate Edition for Compatibility
+# Dockerfile for SRVPro Lite
 # Stage 1: Build premake from source
 FROM debian:bullseye as premake-builder
-RUN apt update && env DEBIAN_FRONTEND=noninteractive apt install -y wget build-essential p7zip-full uuid-dev && rm -rf /var/lib/apt/lists/*
+
+RUN apt update && \
+    env DEBIAN_FRONTEND=noninteractive apt install -y wget build-essential p7zip-full uuid-dev && \
+    rm -rf /var/lib/apt/lists/*
+
 WORKDIR /usr/src
 RUN wget -O premake.zip https://github.com/premake/premake-core/releases/download/v5.0.0-beta7/premake-5.0.0-beta7-src.zip && \
-    7z x -y -opremake premake.zip && cd premake/build/gmake.unix && make -j$(nproc)
+    7z x -y -opremake premake.zip && \
+    cd premake/build/gmake.unix && \
+    make -j$(nproc)
 
 # Stage 2: Build the main application
 FROM node:16-bullseye-slim
-LABEL Author="GuangDai"
+LABEL Author="Nanahira <nanahira@momobako.com>"
 
 # Install dependencies
 RUN apt update && \
@@ -28,20 +34,16 @@ COPY --from=premake-builder /usr/src/premake/bin/release/premake5 /usr/bin/prema
 RUN git clone --branch=server --recursive --depth=1 https://github.com/GuangDai/ygopro && \
     cd ygopro && \
     git submodule foreach git checkout master && \
-    # ===================================================================
-    # **终极解决方案 1/2：强制清理子模块**
-    # 这条命令会删除子模块中所有未被 git 追踪的文件，包括任何
-    # 可能存在的预编译库 (.a, .o 文件) 和旧的构建产物。
-    # 确保我们从一个绝对干净的状态开始编译。
-    # ===================================================================
-    git submodule foreach git clean -fdx && \
     premake5 gmake --lua-deb && \
     cd build && \
     # ===================================================================
-    # **终极解决方案 2/2：使用最保守的编译参数**
-    # 我们继续使用这些参数，确保所有从源码编译的东西都是兼容的。
+    # **关键修改**：添加 CXXFLAGS 参数来确保 CPU 兼容性。
+    # -march=x86-64 指示编译器为通用的 64 位架构生成代码，
+    # 这样可以避免在不支持高级指令集（如 AVX2）的旧 CPU 上
+    # 出现 "Illegal instruction" (非法指令) 错误。
+    # -O2 是一个标准的、安全的优化等级。
     # ===================================================================
-    make V=1 CXXFLAGS="-O2 -march=nehalem -mno-avx -mno-avx2" config=release -j$(nproc) &> /ygopro-server/build_log.txt && \
+    make CXXFLAGS="-O2 -march=x86-64" config=release -j$(nproc) && \
     cd .. && \
     mv ./bin/release/ygopro . && \
     strip ygopro && \

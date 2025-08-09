@@ -1,90 +1,147 @@
-# Dockerfile for SRVPro Lite
-# Stage 1: Build premake from source
-FROM debian:bullseye as premake-builder
+# =========================================================================
+#  Dockerfile for SRVPro Lite (Optimized & Refactored)
+# =========================================================================
+#  This Dockerfile uses a three-stage build process:
+#  1. premake-builder: Builds the premake5 build tool.
+#  2. static-builder:   Compiles all C/C++ dependencies as static libraries (.a)
+#                       and then builds the main 'ygopro' application, linking
+#                       everything statically into a single, dependency-free executable.
+#  3. final:            Creates the final, minimal production image by starting
+#                       from a clean Node.js base, copying only the application
+#                       source and the static 'ygopro' executable from the
+#                       previous stage.
+# =========================================================================
 
-RUN apt update && \
-    env DEBIAN_FRONTEND=noninteractive apt install -y wget build-essential p7zip-full uuid-dev && \
+# --- STAGE 1: Build premake from source ---
+# This stage's only purpose is to build the premake5 binary.
+FROM debian:bullseye AS premake-builder
+
+LABEL stage="premake-builder"
+
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+        wget \
+        build-essential \
+        p7zip-full \
+        uuid-dev \
+        ca-certificates && \
     rm -rf /var/lib/apt/lists/*
 
 WORKDIR /usr/src
 RUN wget -O premake.zip https://github.com/premake/premake-core/releases/download/v5.0.0-beta7/premake-5.0.0-beta7-src.zip && \
     7z x -y -opremake premake.zip && \
     cd premake/build/gmake.unix && \
-    make -j$(nproc)
+    make -j$(nproc) && \
+    # Cleanup to keep the layer small
+    rm -rf /usr/src/premake.zip /usr/src/premake
 
-# Stage 2: Build the main application with FULL static linking and hardening
-FROM node:16-bullseye-slim
+# --- STAGE 2: Build the fully static C++ application ---
+# This is the main build environment. It compiles everything from source.
+FROM debian:bullseye AS static-builder
+
 LABEL Author="Nanahira <nanahira@momobako.com>"
+LABEL stage="static-builder"
 
-# Install essential build tools, including those needed for static dependencies.
-RUN apt update && \
-    env DEBIAN_FRONTEND=noninteractive apt install -y wget git build-essential p7zip-full python3 python-is-python3 libssl-dev libreadline-dev libncurses-dev && \
+# Install all necessary build tools for C++ dependencies and the main app.
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+        git \
+        build-essential \
+        p7zip-full \
+        wget \
+        ca-certificates \
+        python3 \
+        python-is-python3 \
+        # Dependencies needed by Lua for a full build
+        libreadline-dev \
+        libncurses5-dev && \
     rm -rf /var/lib/apt/lists/*
 
-# Copy application source and install node modules
-COPY . /ygopro-server
-WORKDIR /ygopro-server
-RUN npm ci && \
-    mkdir config decks replays logs
+# Copy the premake binary from the first stage.
+COPY --from=premake-builder /usr/src/premake/bin/release/premake5 /usr/local/bin/premake5
 
-# Copy the premake binary from the first stage
-COPY --from=premake-builder /usr/src/premake/bin/release/premake5 /usr/bin/premake5
+WORKDIR /usr/src/build
 
-# --- Build ygopro with all dependencies statically linked ---
-WORKDIR /ygopro-server/ygopro-build
-
-# Clone ygopro source
+# Clone ygopro source code.
 RUN git clone --branch=server --recursive --depth=1 https://github.com/GuangDai/ygopro . && \
-    git submodule foreach git checkout master
+    git submodule update --init --recursive
 
-# --- Manually build all dependencies as static libraries (.a) ---
+# --- Build all dependencies as static libraries (.a) ---
+# We build them ourselves to guarantee they are static and compiled with -fPIC.
 
-# Build libevent
+# Build libevent (static)
 RUN wget -O libevent.tar.gz https://github.com/libevent/libevent/releases/download/release-2.1.12-stable/libevent-2.1.12-stable.tar.gz && \
     tar xf libevent.tar.gz && \
     cd libevent-2.1.12-stable && \
-    ./configure --disable-shared --enable-static --disable-openssl --prefix=/usr/local && \
+    ./configure CFLAGS="-fPIC" --disable-shared --enable-static --disable-openssl --prefix=/usr/local && \
     make -j$(nproc) && make install && \
     cd .. && rm -rf libevent*
 
-# Build lua
+# Build lua (static)
 RUN wget -O lua.tar.gz https://www.lua.org/ftp/lua-5.3.6.tar.gz && \
     tar zxf lua.tar.gz && \
     cd lua-5.3.6 && \
-    make generic MYCFLAGS="-fPIC" && make install && \
+    # Use 'make linux' and MYCFLAGS="-fPIC" is critical for static linking into another binary
+    make linux MYCFLAGS="-fPIC" && make install && \
     cd .. && rm -rf lua*
 
-# Build sqlite3
+# Build sqlite3 (static)
 RUN wget -O sqlite.zip https://www.sqlite.org/2022/sqlite-amalgamation-3390400.zip && \
     7z x -y -osqlite3 sqlite.zip && \
-    # FIX: The unzipped directory contains a version number. Use a wildcard to enter it.
     cd sqlite-amalgamation-* && \
-    gcc -c -fPIC sqlite3.c && \
+    # Compile as Position-Independent Code (-fPIC) and create a static archive (.a)
+    gcc -c -fPIC -O2 sqlite3.c && \
     ar rcs libsqlite3.a sqlite3.o && \
     install -D libsqlite3.a /usr/local/lib/libsqlite3.a && \
     install -D sqlite3.h /usr/local/include/sqlite3.h && \
     cd .. && rm -rf sqlite*
 
-# --- Now, build the main ygopro application ---
-RUN premake5 gmake && \
-    cd build && \
-    # ===================================================================
-    # CRITICAL FIX & PROACTIVE ENHANCEMENT:
-    # 1. -march=x86-64-v2: Ensures compatibility with older CPUs.
-    # 2. -static...: Creates a self-contained executable.
-    # 3. Explicitly link common static dependencies (-lpthread, -ldl) to
-    #    prevent linking errors at the final stage.
-    # ===================================================================
-    make CXXFLAGS="-O2 -fPIC -march=x86-64-v2 -fstack-protector-strong -D_FORTIFY_SOURCE=2" \
-         LDFLAGS="-static -static-libgcc -static-libstdc++ -Wl,-z,relro,-z,now -lpthread -ldl" \
-         config=release -j$(nproc)
+# --- Build the main ygopro application with FULL static linking ---
+WORKDIR /usr/src/build/build
 
-# --- Final cleanup and setup ---
-WORKDIR /ygopro-server
-RUN mv /ygopro-server/ygopro-build/bin/release/ygopro . && \
-    strip ygopro && \
-    mkdir -p ./ygopro/replay ./ygopro/expansions && \
-    rm -rf /ygopro-server/ygopro-build
+RUN premake5 gmake --os=linux && \
+    # This is the most critical step. We force a fully static build.
+    make \
+        config=release \
+        # CXXFLAGS: Compiler flags for optimization and security hardening.
+        CXXFLAGS="-O2 -fPIC -march=x86-64-v2 -fstack-protector-strong -D_FORTIFY_SOURCE=2 -Wall" \
+        # LDFLAGS: Linker flags to create a self-contained executable.
+        # -static: Tells the linker to use static libraries (.a) instead of shared ones (.so).
+        # -static-libgcc -static-libstdc++: Statically links the C and C++ standard libraries.
+        # -Wl,...: Linker-specific flags for security.
+        # -lpthread -ldl -lm: Explicitly link necessary system libraries statically.
+        LDFLAGS="-static -static-libgcc -static-libstdc++ -Wl,-z,relro,-z,now -lpthread -ldl -lm" \
+        -j$(nproc)
+
+# --- STAGE 3: Final, minimal production image ---
+# We start from a clean Node.js image and only copy what's absolutely necessary.
+FROM node:16-bullseye-slim AS final
+
+LABEL Author="Nanahira <nanahira@momobako.com>"
+
+WORKDIR /app
+
+# Copy package manifests and install *production* dependencies only.
+COPY package*.json ./
+RUN npm ci --omit=dev
+
+# Copy the rest of the application source code.
+COPY . .
+
+# Copy the fully static, self-contained 'ygopro' binary from the builder stage.
+COPY --from=static-builder /usr/src/build/bin/release/ygopro ./ygopro
+
+# Create necessary directories and set up permissions.
+# Running as a non-root user is a critical security best practice.
+RUN mkdir -p config decks replays logs ./ygopro/replay ./ygopro/expansions && \
+    chown -R node:node /app
+
+# Strip the binary to reduce its size.
+RUN strip ./ygopro
+
+USER node
 
 EXPOSE 7911 7922 7933
-# VOLUME [ /ygopro-server/config, /ygopro-server/decks, /ygopro-server/replays ]
+VOLUME [ "/app/config", "/app/decks", "/app/replays", "/app/logs" ]
+
+CMD [ "npm", "start" ]

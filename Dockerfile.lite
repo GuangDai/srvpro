@@ -1,9 +1,10 @@
 # Dockerfile for SRVPro Lite
+# Stage 1: Build premake from source
 FROM debian:bullseye as premake-builder
 
 RUN apt update && \
     env DEBIAN_FRONTEND=noninteractive apt install -y wget build-essential p7zip-full uuid-dev && \
-    rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/* /var/log/*
+    rm -rf /var/lib/apt/lists/*
 
 WORKDIR /usr/src
 RUN wget -O premake.zip https://github.com/premake/premake-core/releases/download/v5.0.0-beta7/premake-5.0.0-beta7-src.zip && \
@@ -11,36 +12,45 @@ RUN wget -O premake.zip https://github.com/premake/premake-core/releases/downloa
     cd premake/build/gmake.unix && \
     make -j$(nproc)
 
+# Stage 2: Build the main application
 FROM node:16-bullseye-slim
 LABEL Author="Nanahira <nanahira@momobako.com>"
 
-# apt
+# Install dependencies
 RUN apt update && \
     env DEBIAN_FRONTEND=noninteractive apt install -y wget git build-essential libevent-dev libsqlite3-dev p7zip-full python3 python-is-python3 liblua5.3-dev && \
-    rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
+    rm -rf /var/lib/apt/lists/*
 
-# srvpro
+# Copy application source and install node modules
 COPY . /ygopro-server
 WORKDIR /ygopro-server
 RUN npm ci && \
     mkdir config decks replays logs
 
+# Copy the premake binary from the first stage
 COPY --from=premake-builder /usr/src/premake/bin/release/premake5 /usr/bin/premake5
 
+# Clone and build the ygopro server component
 RUN git clone --branch=server --recursive --depth=1 https://github.com/GuangDai/ygopro && \
     cd ygopro && \
     git submodule foreach git checkout master && \
     premake5 gmake --lua-deb && \
     cd build && \
-    make config=release -j$(nproc) && \
+    # ===================================================================
+    # MODIFICATION: Added CXXFLAGS to ensure CPU compatibility.
+    # -march=x86-64 compiles the binary for a generic 64-bit architecture,
+    # preventing the "Illegal instruction" error on older CPUs.
+    # ===================================================================
+    make CXXFLAGS="-O2 -march=x86-64" config=release -j$(nproc) && \
     cd .. && \
     mv ./bin/release/ygopro . && \
     strip ygopro && \
     mkdir replay expansions && \
+    # Clean up unnecessary files to reduce image size
     rm -rf .git* bin obj build ocgcore cmake lua premake* sound textures .travis.yml *.txt appveyor.yml LICENSE README.md *.lua strings.conf system.conf && \
     ls gframe | sed '/game.cpp/d' | xargs -I {} rm -rf gframe/{}
 
-# infos
+# Final setup
 WORKDIR /ygopro-server
 EXPOSE 7911 7922 7933
 # VOLUME [ /ygopro-server/config, /ygopro-server/decks, /ygopro-server/replays ]

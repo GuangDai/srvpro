@@ -12,13 +12,14 @@ RUN wget -O premake.zip https://github.com/premake/premake-core/releases/downloa
     cd premake/build/gmake.unix && \
     make -j$(nproc)
 
-# Stage 2: Build the main application
+# Stage 2: Build the main application with FULL static linking and hardening
 FROM node:16-bullseye-slim
 LABEL Author="Nanahira <nanahira@momobako.com>"
 
-# Install dependencies
+# Install only the absolute essential build tools.
+# CRITICAL: We DO NOT install any -dev libraries to force static linking.
 RUN apt update && \
-    env DEBIAN_FRONTEND=noninteractive apt install -y wget git build-essential libevent-dev libsqlite3-dev p7zip-full python3 python-is-python3 liblua5.3-dev && \
+    env DEBIAN_FRONTEND=noninteractive apt install -y wget git build-essential p7zip-full python3 python-is-python3 && \
     rm -rf /var/lib/apt/lists/*
 
 # Copy application source and install node modules
@@ -30,28 +31,61 @@ RUN npm ci && \
 # Copy the premake binary from the first stage
 COPY --from=premake-builder /usr/src/premake/bin/release/premake5 /usr/bin/premake5
 
-# Clone and build the ygopro server component
-RUN git clone --branch=server --recursive --depth=1 https://github.com/GuangDai/ygopro && \
-    cd ygopro && \
-    git submodule foreach git checkout master && \
-    premake5 gmake --lua-deb && \
+# --- Build ygopro with all dependencies statically linked ---
+WORKDIR /ygopro-server/ygopro-build
+
+# Clone ygopro source
+RUN git clone --branch=server --recursive --depth=1 https://github.com/GuangDai/ygopro . && \
+    git submodule foreach git checkout master
+
+# --- Manually build all dependencies as static libraries (.a) ---
+
+# Build libevent
+RUN wget -O libevent.tar.gz https://github.com/libevent/libevent/releases/download/release-2.1.12-stable/libevent-2.1.12-stable.tar.gz && \
+    tar xf libevent.tar.gz && \
+    cd libevent-2.1.12-stable && \
+    ./configure --disable-shared --enable-static --prefix=/usr/local && \
+    make -j$(nproc) && make install && \
+    cd .. && rm -rf libevent*
+
+# Build lua
+RUN wget -O lua.tar.gz https://www.lua.org/ftp/lua-5.3.6.tar.gz && \
+    tar zxf lua.tar.gz && \
+    cd lua-5.3.6 && \
+    make linux MYCFLAGS="-fPIC" && make install && \
+    cd .. && rm -rf lua*
+
+# Build sqlite3
+RUN wget -O sqlite.zip https://www.sqlite.org/2022/sqlite-amalgamation-3390400.zip && \
+    7z x -y -osqlite3 sqlite.zip && \
+    cd sqlite3 && \
+    gcc -c -fPIC sqlite3.c && \
+    ar rcs libsqlite3.a sqlite3.o && \
+    install -D libsqlite3.a /usr/local/lib/libsqlite3.a && \
+    install -D sqlite3.h /usr/local/include/sqlite3.h && \
+    cd .. && rm -rf sqlite*
+
+# --- Now, build the main ygopro application ---
+RUN premake5 gmake --lua-deb && \
     cd build && \
     # ===================================================================
-    # MODIFICATION: Added CXXFLAGS to ensure CPU compatibility.
-    # -march=x86-64 compiles the binary for a generic 64-bit architecture,
-    # preventing the "Illegal instruction" error on older CPUs.
+    # CRITICAL FIX:
+    # 1. -march=x86-64-v2: Ensures compatibility with older CPUs by avoiding AVX instructions.
+    # 2. -static: Tells the linker to prefer static libraries.
+    # 3. -static-libgcc -static-libstdc++: Statically links C/C++ runtimes.
+    # This creates a truly portable, self-contained executable.
     # ===================================================================
-    make CXXFLAGS="-O2 -march=x86-64" config=release -j$(nproc) && \
-    cd .. && \
-    mv ./bin/release/ygopro . && \
-    strip ygopro && \
-    mkdir replay expansions && \
-    # Clean up unnecessary files to reduce image size
-    rm -rf .git* bin obj build ocgcore cmake lua premake* sound textures .travis.yml *.txt appveyor.yml LICENSE README.md *.lua strings.conf system.conf && \
-    ls gframe | sed '/game.cpp/d' | xargs -I {} rm -rf gframe/{}
+    make CXXFLAGS="-O2 -fPIC -march=x86-64-v2 -fstack-protector-strong -D_FORTIFY_SOURCE=2" \
+         LDFLAGS="-static -static-libgcc -static-libstdc++ -Wl,-z,relro,-z,now" \
+         config=release -j$(nproc)
 
-# Final setup
+# --- Final cleanup and setup ---
 WORKDIR /ygopro-server
+RUN mv /ygopro-server/ygopro-build/bin/release/ygopro . && \
+    strip ygopro && \
+    mkdir -p ./ygopro/replay ./ygopro/expansions && \
+    rm -rf /ygopro-server/ygopro-build
+
 EXPOSE 7911 7922 7933
 # VOLUME [ /ygopro-server/config, /ygopro-server/decks, /ygopro-server/replays ]
 

@@ -41,8 +41,6 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # QEMU is kept for potential future platform additions but is not
-      # strictly required for a single amd64 build on an amd64 runner.
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
 
@@ -60,9 +58,6 @@ jobs:
         uses: docker/metadata-action@v5
         with:
           images: ${{ env.DOCKER_IMAGE }}
-          # This generates tags based on the Git event, adding a '-lite' suffix.
-          # - For a tag 'v1.2.3', it creates 'v1.2.3-lite'.
-          # - For 'master' branch, it creates 'master-lite'.
           tags: |
             type=ref,event=branch,suffix=-lite
             type=ref,event=tag,suffix=-lite
@@ -72,8 +67,12 @@ jobs:
         with:
           context: .
           file: ./Dockerfile.lite
-          # Build only for the amd64 platform
-          platforms: linux/amd64
+          # ===================================================================
+          # **核心修改 1**
+          # 强制在模拟的 x86-64 v2 (支持 AVX, 但不支持 AVX2) 平台上构建。
+          # 这模拟了 'docker-noavx2' Runner 的效果，确保了最大兼容性。
+          # ===================================================================
+          platforms: linux/amd64/v2
           push: true
           tags: ${{ steps.meta-lite.outputs.tags }}
           labels: ${{ steps.meta-lite.outputs.labels }}
@@ -85,7 +84,6 @@ jobs:
   # ===================================================================
   build-full-and-deploy:
     runs-on: ubuntu-latest
-    # This job must wait for the 'lite' image to be successfully built and pushed.
     needs: build-lite
     steps:
       - name: Checkout repository
@@ -108,9 +106,6 @@ jobs:
         uses: docker/metadata-action@v5
         with:
           images: ${{ env.DOCKER_IMAGE }}
-          # This generates the final tags for the 'full' image.
-          # - For a tag 'v1.2.3', it creates 'v1.2.3'.
-          # - For 'master' branch, it creates 'latest' and 'full'.
           tags: |
             type=ref,event=branch
             type=ref,event=tag
@@ -121,8 +116,6 @@ jobs:
       - name: Determine base image tag
         id: base_tag
         run: |
-          # This logic determines which 'lite' tag to use as the base.
-          # It mirrors the logic from the 'meta-lite' step in the previous job.
           if [[ "${{ github.ref_type }}" == "tag" ]]; then
             echo "tag=${{ github.ref_name }}-lite" >> $GITHUB_OUTPUT
           else
@@ -134,13 +127,14 @@ jobs:
         with:
           context: .
           file: ./Dockerfile
-          # Build only for the amd64 platform
-          platforms: linux/amd64
-          # Pass the correct lite image tag as a build argument
+          # ===================================================================
+          # **核心修改 2**
+          # 同样，强制在 v2 平台上构建 'full' 镜像。
+          # ===================================================================
+          platforms: linux/amd64/v2
           build-args: |
             BASE_IMAGE=${{ env.DOCKER_IMAGE }}:${{ steps.base_tag.outputs.tag }}
           push: true
-          # Push with all generated tags (e.g., 'latest', 'full', 'v1.2.3')
           tags: ${{ steps.meta-full.outputs.tags }}
           labels: ${{ steps.meta-full.outputs.labels }}
           cache-from: type=registry,ref=${{ env.DOCKER_IMAGE }}:full-buildcache

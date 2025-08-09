@@ -16,128 +16,171 @@ env:
   DOCKER_IMAGE: ${{ secrets.DOCKERHUB_USERNAME }}/${{ github.event.repository.name }}
 
 jobs:
-  # --- JOB 1: Build Lite Images ---
-  build-lite:
+  # ===================================================================
+  # AMD64 (x86) BUILD TRACK
+  # ===================================================================
+  build-lite-amd64:
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - platform: linux/amd64
-            arch: amd64
-          - platform: linux/arm64
-            arch: arm64
-    
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-
       - name: Set up QEMU & Buildx
         uses: docker/setup-qemu-action@v3
       - uses: docker/setup-buildx-action@v3
-
       - name: Login to Docker Hub
         uses: docker/login-action@v3
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
-
-      - name: Extract metadata for 'lite' image
-        id: meta_lite
+      - name: Extract metadata for amd64-lite
+        id: meta
         uses: docker/metadata-action@v5
         with:
           images: ${{ env.DOCKER_IMAGE }}
           tags: |
-            type=ref,event=branch,suffix=-{{matrix.arch}}-lite
-            type=ref,event=tag,suffix=-{{matrix.arch}}-lite
-
-      - name: Build and push 'lite' image
+            type=ref,event=branch,suffix=-amd64-lite
+            type=ref,event=tag,suffix=-amd64-lite
+      - name: Build and push amd64-lite image
         uses: docker/build-push-action@v5
         with:
           context: .
           file: ./Dockerfile.lite
-          platforms: ${{ matrix.platform }}
+          platforms: linux/amd64
           push: true
-          tags: ${{ steps.meta_lite.outputs.tags }}
-          labels: ${{ steps.meta_lite.outputs.labels }}
-          cache-from: type=registry,ref=${{ env.DOCKER_IMAGE }}:${{ matrix.arch }}-lite-buildcache
-          cache-to: type=registry,ref=${{ env.DOCKER_IMAGE }}:${{ matrix.arch }}-lite-buildcache,mode=max
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=registry,ref=${{ env.DOCKER_IMAGE }}:amd64-lite-buildcache
+          cache-to: type=registry,ref=${{ env.DOCKER_IMAGE }}:amd64-lite-buildcache,mode=max
 
----
-  # --- JOB 2: Build Full Images (depends on Lite) ---
-  build-full:
+  build-full-amd64:
     runs-on: ubuntu-latest
-    needs: build-lite # This job only starts after build-lite succeeds
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - platform: linux/amd64
-            arch: amd64
-          - platform: linux/arm64
-            arch: arm64
-    
+    needs: build-lite-amd64
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-
       - name: Set up QEMU & Buildx
         uses: docker/setup-qemu-action@v3
       - uses: docker/setup-buildx-action@v3
-
       - name: Login to Docker Hub
         uses: docker/login-action@v3
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
-
-      - name: Extract metadata for 'full' image
-        id: meta_full
+      - name: Extract metadata for amd64-full
+        id: meta
         uses: docker/metadata-action@v5
         with:
           images: ${{ env.DOCKER_IMAGE }}
           tags: |
-            type=ref,event=branch,suffix=-{{matrix.arch}}-full
-            type=ref,event=tag,suffix=-{{matrix.arch}}-full
-
-      - name: Build and push 'full' image
+            type=ref,event=branch,suffix=-amd64-full
+            type=ref,event=tag,suffix=-amd64-full
+      - name: Build and push amd64-full image
         uses: docker/build-push-action@v5
         with:
           context: .
           file: ./Dockerfile
-          platforms: ${{ matrix.platform }}
+          platforms: linux/amd64
           build-args: |
-            BASE_IMAGE=${{ env.DOCKER_IMAGE }}:${{ github.ref_name }}-${{ matrix.arch }}-lite
+            BASE_IMAGE=${{ env.DOCKER_IMAGE }}:${{ github.ref_name }}-amd64-lite
           push: true
-          tags: ${{ steps.meta_full.outputs.tags }}
-          labels: ${{ steps.meta_full.outputs.labels }}
-          cache-from: type=registry,ref=${{ env.DOCKER_IMAGE }}:${{ matrix.arch }}-full-buildcache
-          cache-to: type=registry,ref=${{ env.DOCKER_IMAGE }}:${{ matrix.arch }}-full-buildcache,mode=max
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=registry,ref=${{ env.DOCKER_IMAGE }}:amd64-full-buildcache
+          cache-to: type=registry,ref=${{ env.DOCKER_IMAGE }}:amd64-full-buildcache,mode=max
 
----
-  # --- JOB 3: Deploy Manifests ---
+  # ===================================================================
+  # ARM64 BUILD TRACK
+  # ===================================================================
+  build-lite-arm64:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      - name: Set up QEMU & Buildx
+        uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+      - name: Login to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+      - name: Extract metadata for arm64-lite
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.DOCKER_IMAGE }}
+          tags: |
+            type=ref,event=branch,suffix=-arm64-lite
+            type=ref,event=tag,suffix=-arm64-lite
+      - name: Build and push arm64-lite image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./Dockerfile.lite
+          platforms: linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=registry,ref=${{ env.DOCKER_IMAGE }}:arm64-lite-buildcache
+          cache-to: type=registry,ref=${{ env.DOCKER_IMAGE }}:arm64-lite-buildcache,mode=max
+
+  build-full-arm64:
+    runs-on: ubuntu-latest
+    needs: build-lite-arm64
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      - name: Set up QEMU & Buildx
+        uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+      - name: Login to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+      - name: Extract metadata for arm64-full
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.DOCKER_IMAGE }}
+          tags: |
+            type=ref,event=branch,suffix=-arm64-full
+            type=ref,event=tag,suffix=-arm64-full
+      - name: Build and push arm64-full image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./Dockerfile
+          platforms: linux/arm64
+          build-args: |
+            BASE_IMAGE=${{ env.DOCKER_IMAGE }}:${{ github.ref_name }}-arm64-lite
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=registry,ref=${{ env.DOCKER_IMAGE }}:arm64-full-buildcache
+          cache-to: type=registry,ref=${{ env.DOCKER_IMAGE }}:arm64-full-buildcache,mode=max
+
+  # ===================================================================
+  # FINAL DEPLOY JOB
+  # ===================================================================
   deploy:
     runs-on: ubuntu-latest
-    needs: build-full # This job only starts after build-full succeeds
-    
+    needs: [build-full-amd64, build-full-arm64] # Waits for both tracks to finish
     steps:
       - name: Login to Docker Hub
         uses: docker/login-action@v3
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
-
       - name: Get sanitized branch/tag name
         id: get_name
         run: echo "ref_name=$(echo ${{ github.ref_name }} | sed -e 's/[^a-zA-Z0-9.-]/-/g')" >> $GITHUB_ENV
-
       - name: Create and push 'lite' manifest
         run: |
           docker manifest create ${{ env.DOCKER_IMAGE }}:${{ env.ref_name }}-lite \
             ${{ env.DOCKER_IMAGE }}:${{ env.ref_name }}-amd64-lite \
             ${{ env.DOCKER_IMAGE }}:${{ env.ref_name }}-arm64-lite
           docker manifest push ${{ env.DOCKER_IMAGE }}:${{ env.ref_name }}-lite
-
       - name: Create and push 'full' & branch manifest
         run: |
           docker manifest create ${{ env.DOCKER_IMAGE }}:${{ env.ref_name }}-full \
@@ -145,7 +188,6 @@ jobs:
             ${{ env.DOCKER_IMAGE }}:${{ env.ref_name }}-arm64-full
           docker manifest push ${{ env.DOCKER_IMAGE }}:${{ env.ref_name }}-full
           docker manifest push ${{ env.DOCKER_IMAGE }}:${{ env.ref_name }}
-
       - name: Create and push 'latest-lite' manifest
         if: github.ref == 'refs/heads/master'
         run: |
@@ -153,7 +195,6 @@ jobs:
             ${{ env.DOCKER_IMAGE }}:master-amd64-lite \
             ${{ env.DOCKER_IMAGE }}:master-arm64-lite
           docker manifest push ${{ env.DOCKER_IMAGE }}:lite
-
       - name: Create and push 'latest-full' & 'latest' manifest
         if: github.ref == 'refs/heads/master'
         run: |

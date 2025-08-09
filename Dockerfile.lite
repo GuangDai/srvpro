@@ -1,20 +1,14 @@
-# Dockerfile for SRVPro Lite
+# Dockerfile - Ultimate Edition for Compatibility
 # Stage 1: Build premake from source
 FROM debian:bullseye as premake-builder
-
-RUN apt update && \
-    env DEBIAN_FRONTEND=noninteractive apt install -y wget build-essential p7zip-full uuid-dev && \
-    rm -rf /var/lib/apt/lists/*
-
+RUN apt update && env DEBIAN_FRONTEND=noninteractive apt install -y wget build-essential p7zip-full uuid-dev && rm -rf /var/lib/apt/lists/*
 WORKDIR /usr/src
 RUN wget -O premake.zip https://github.com/premake/premake-core/releases/download/v5.0.0-beta7/premake-5.0.0-beta7-src.zip && \
-    7z x -y -opremake premake.zip && \
-    cd premake/build/gmake.unix && \
-    make -j$(nproc)
+    7z x -y -opremake premake.zip && cd premake/build/gmake.unix && make -j$(nproc)
 
 # Stage 2: Build the main application
 FROM node:16-bullseye-slim
-LABEL Author="Nanahira <nanahira@momobako.com>"
+LABEL Author="GuangDai"
 
 # Install dependencies
 RUN apt update && \
@@ -34,14 +28,18 @@ COPY --from=premake-builder /usr/src/premake/bin/release/premake5 /usr/bin/prema
 RUN git clone --branch=server --recursive --depth=1 https://github.com/GuangDai/ygopro && \
     cd ygopro && \
     git submodule foreach git checkout master && \
+    # ===================================================================
+    # **终极解决方案 1/2：强制清理子模块**
+    # 这条命令会删除子模块中所有未被 git 追踪的文件，包括任何
+    # 可能存在的预编译库 (.a, .o 文件) 和旧的构建产物。
+    # 确保我们从一个绝对干净的状态开始编译。
+    # ===================================================================
+    git submodule foreach git clean -fdx && \
     premake5 gmake --lua-deb && \
     cd build && \
     # ===================================================================
-    # **最终解决方案**：使用更保守的编译参数以实现最大兼容性
-    # -march=nehalem  : 编译目标为非常早期的 x86-64 CPU 架构，确保广泛兼容。
-    # -mno-avx        : 明确禁用 AVX 指令集。
-    # -mno-avx2       : 明确禁用 AVX2 指令集。
-    # 这个组合可以彻底解决 "Illegal instruction" 问题。
+    # **终极解决方案 2/2：使用最保守的编译参数**
+    # 我们继续使用这些参数，确保所有从源码编译的东西都是兼容的。
     # ===================================================================
     make CXXFLAGS="-O2 -march=nehalem -mno-avx -mno-avx2" config=release -j$(nproc) && \
     cd .. && \

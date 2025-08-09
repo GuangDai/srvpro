@@ -17,7 +17,6 @@ FROM node:16-bullseye-slim
 LABEL Author="Nanahira <nanahira@momobako.com>"
 
 # Install essential build tools, including those needed for static dependencies.
-# FIX: Added libreadline-dev and libncurses-dev to fix Lua compilation.
 RUN apt update && \
     env DEBIAN_FRONTEND=noninteractive apt install -y wget git build-essential p7zip-full python3 python-is-python3 libssl-dev libreadline-dev libncurses-dev && \
     rm -rf /var/lib/apt/lists/*
@@ -52,14 +51,14 @@ RUN wget -O libevent.tar.gz https://github.com/libevent/libevent/releases/downlo
 RUN wget -O lua.tar.gz https://www.lua.org/ftp/lua-5.3.6.tar.gz && \
     tar zxf lua.tar.gz && \
     cd lua-5.3.6 && \
-    # FIX: Use 'make generic' for a more robust, non-interactive build suitable for embedding.
     make generic MYCFLAGS="-fPIC" && make install && \
     cd .. && rm -rf lua*
 
 # Build sqlite3
 RUN wget -O sqlite.zip https://www.sqlite.org/2022/sqlite-amalgamation-3390400.zip && \
     7z x -y -osqlite3 sqlite.zip && \
-    cd sqlite3 && \
+    # FIX: The unzipped directory contains a version number. Use a wildcard to enter it.
+    cd sqlite-amalgamation-* && \
     gcc -c -fPIC sqlite3.c && \
     ar rcs libsqlite3.a sqlite3.o && \
     install -D libsqlite3.a /usr/local/lib/libsqlite3.a && \
@@ -67,18 +66,17 @@ RUN wget -O sqlite.zip https://www.sqlite.org/2022/sqlite-amalgamation-3390400.z
     cd .. && rm -rf sqlite*
 
 # --- Now, build the main ygopro application ---
-# FIX: Removed '--lua-deb' to ensure premake uses our self-compiled static Lua library.
 RUN premake5 gmake && \
     cd build && \
     # ===================================================================
-    # CRITICAL FIX:
-    # 1. -march=x86-64-v2: Ensures compatibility with older CPUs by avoiding AVX instructions.
-    # 2. -static: Tells the linker to prefer static libraries.
-    # 3. -static-libgcc -static-libstdc++: Statically links C/C++ runtimes.
-    # This creates a truly portable, self-contained executable.
+    # CRITICAL FIX & PROACTIVE ENHANCEMENT:
+    # 1. -march=x86-64-v2: Ensures compatibility with older CPUs.
+    # 2. -static...: Creates a self-contained executable.
+    # 3. Explicitly link common static dependencies (-lpthread, -ldl) to
+    #    prevent linking errors at the final stage.
     # ===================================================================
     make CXXFLAGS="-O2 -fPIC -march=x86-64-v2 -fstack-protector-strong -D_FORTIFY_SOURCE=2" \
-         LDFLAGS="-static -static-libgcc -static-libstdc++ -Wl,-z,relro,-z,now" \
+         LDFLAGS="-static -static-libgcc -static-libstdc++ -Wl,-z,relro,-z,now -lpthread -ldl" \
          config=release -j$(nproc)
 
 # --- Final cleanup and setup ---
@@ -90,5 +88,3 @@ RUN mv /ygopro-server/ygopro-build/bin/release/ygopro . && \
 
 EXPOSE 7911 7922 7933
 # VOLUME [ /ygopro-server/config, /ygopro-server/decks, /ygopro-server/replays ]
-
-CMD [ "npm", "start" ]

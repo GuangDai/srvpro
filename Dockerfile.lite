@@ -41,7 +41,7 @@ RUN git clone --branch=server --recursive --depth=1 https://github.com/GuangDai/
     # **终极解决方案 2/2：使用最保守的编译参数**
     # 我们继续使用这些参数，确保所有从源码编译的东西都是兼容的。
     # ===================================================================
-    make CXXFLAGS="-O2 -march=nehalem -mno-avx -mno-avx2" config=release -j$(nproc) && \
+    make V=1 CXXFLAGS="-O2 -march=nehalem -mno-avx -mno-avx2" config=release -j$(nproc) &> /ygopro-server/build_log.txt && \
     cd .. && \
     mv ./bin/release/ygopro . && \
     strip ygopro && \

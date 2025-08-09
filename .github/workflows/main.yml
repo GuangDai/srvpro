@@ -1,29 +1,27 @@
 name: Docker Publish
 
-# 工作流触发条件
+# Workflow triggers
 on:
   push:
     branches:
-      - '**' # 任何分支的推送
+      - '**' # Any branch push
     tags:
-      - 'v*.*.*' # 版本标签的推送
+      - 'v*.*.*' # Any version tag push
   pull_request:
     branches:
-      - 'master' # 针对 master 分支的 PR
+      - 'master' # PRs targeting master
 
-# 环境变量，定义你的 Docker Hub 镜像名称
+# Environment variables
 env:
   DOCKER_IMAGE: ${{ secrets.DOCKERHUB_USERNAME }}/${{ github.event.repository.name }}
 
 jobs:
-  # --- 构建任务 ---
+  # --- Build Job ---
   build:
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        # ** FIX: Define platforms and a short 'arch' name for each **
-        # This avoids using the 'replace' function and makes the code cleaner
         include:
           - platform: linux/amd64
             arch: amd64
@@ -34,7 +32,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Set up QEMU
+      - name: Set up QEMU for multi-platform builds
         uses: docker/setup-qemu-action@v3
 
       - name: Set up Docker Buildx
@@ -46,16 +44,23 @@ jobs:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-      - name: Extract Docker metadata and generate tags
-        id: meta
+      # ** FIX: Separate metadata generation for each image variant **
+      - name: Extract metadata for 'lite' image
+        id: meta_lite
         uses: docker/metadata-action@v5
         with:
           images: ${{ env.DOCKER_IMAGE }}
-          # ** FIX: Use the 'matrix.arch' variable for the suffix **
           tags: |
-            type=ref,event=branch,suffix=-{{matrix.arch}}-lite,enable={{ !startsWith(github.ref, 'refs/tags/') }}
-            type=ref,event=branch,suffix=-{{matrix.arch}}-full,enable={{ !startsWith(github.ref, 'refs/tags/') }}
+            type=ref,event=branch,suffix=-{{matrix.arch}}-lite
             type=ref,event=tag,suffix=-{{matrix.arch}}-lite
+
+      - name: Extract metadata for 'full' image
+        id: meta_full
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.DOCKER_IMAGE }}
+          tags: |
+            type=ref,event=branch,suffix=-{{matrix.arch}}-full
             type=ref,event=tag,suffix=-{{matrix.arch}}-full
 
       - name: Build and push 'lite' image
@@ -65,13 +70,10 @@ jobs:
           file: ./Dockerfile.lite
           platforms: ${{ matrix.platform }}
           push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          # ** FIX: Use the correct 'matrix.arch' variable **
+          tags: ${{ steps.meta_lite.outputs.tags }}
+          labels: ${{ steps.meta_lite.outputs.labels }}
           cache-from: type=registry,ref=${{ env.DOCKER_IMAGE }}:${{ matrix.arch }}-lite-buildcache
           cache-to: type=registry,ref=${{ env.DOCKER_IMAGE }}:${{ matrix.arch }}-lite-buildcache,mode=max
-          # (Optional) If you need the GIT_CLONE_TOKEN secret, uncomment and add it here
-          # build-args: |
-          #   GIT_CLONE_TOKEN=${{ secrets.GIT_CLONE_TOKEN }}
 
       - name: Build and push 'full' image
         uses: docker/build-push-action@v5
@@ -79,19 +81,18 @@ jobs:
           context: .
           file: ./Dockerfile
           platforms: ${{ matrix.platform }}
-          # ** FIX: Use the correct 'matrix.arch' variable **
           build-args: |
             BASE_IMAGE=${{ env.DOCKER_IMAGE }}:${{ github.ref_name }}-${{ matrix.arch }}-lite
           push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          # ** FIX: Use the correct 'matrix.arch' variable **
+          tags: ${{ steps.meta_full.outputs.tags }}
+          labels: ${{ steps.meta_full.outputs.labels }}
           cache-from: type=registry,ref=${{ env.DOCKER_IMAGE }}:${{ matrix.arch }}-full-buildcache
           cache-to: type=registry,ref=${{ env.DOCKER_IMAGE }}:${{ matrix.arch }}-full-buildcache,mode=max
 
-  # --- 部署任务 ---
+  # --- Deploy Job ---
   deploy:
     runs-on: ubuntu-latest
-    needs: build
+    needs: build # This job runs only after the 'build' job completes successfully
     
     steps:
       - name: Login to Docker Hub
@@ -100,7 +101,7 @@ jobs:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-      - name: Get branch/tag name
+      - name: Get sanitized branch/tag name
         id: get_name
         run: echo "ref_name=$(echo ${{ github.ref_name }} | sed -e 's/[^a-zA-Z0-9.-]/-/g')" >> $GITHUB_ENV
 
@@ -123,15 +124,15 @@ jobs:
         if: github.ref == 'refs/heads/master'
         run: |
           docker manifest create ${{ env.DOCKER_IMAGE }}:lite \
-            ${{ env.DOCKER_IMAGE }}:${{ env.ref_name }}-amd64-lite \
-            ${{ env.DOCKER_IMAGE }}:${{ env.ref_name }}-arm64-lite
+            ${{ env.DOCKER_IMAGE }}:master-amd64-lite \
+            ${{ env.DOCKER_IMAGE }}:master-arm64-lite
           docker manifest push ${{ env.DOCKER_IMAGE }}:lite
 
       - name: Create and push 'latest-full' & 'latest' manifest
         if: github.ref == 'refs/heads/master'
         run: |
           docker manifest create ${{ env.DOCKER_IMAGE }}:full \
-            ${{ env.DOCKER_IMAGE }}:${{ env.ref_name }}-amd64-full \
-            ${{ env.DOCKER_IMAGE }}:${{ env.ref_name }}-arm64-full
+            ${{ env.DOCKER_IMAGE }}:master-amd64-full \
+            ${{ env.DOCKER_IMAGE }}:master-arm64-full
           docker manifest push ${{ env.DOCKER_IMAGE }}:full
           docker manifest push ${{ env.DOCKER_IMAGE }}:latest

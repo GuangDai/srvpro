@@ -98,8 +98,8 @@
         {"name": "data", "type": "word32Ule"}
     ],
     "deck": [
-        {"name": "mainc", "type": "unsigned int"},
-        {"name": "sidec", "type": "unsigned int"},
+        {"name": "mainc", "type": "unsigned int","length": 500},
+        {"name": "sidec", "type": "unsigned int","length": 400},
         {"name": "deckbuf", "type": "unsigned int", "length": 900}
     ],
     "chat": [

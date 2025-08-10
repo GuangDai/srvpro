@@ -1,4 +1,4 @@
-# Dockerfile for SRVPro Lite with Integrated Premake Logic
+# Dockerfile for SRVPro Lite with Integrated Premake Logic (Corrected)
 
 # Stage 1: Build premake from source (no changes here)
 FROM debian:bullseye as premake-builder
@@ -18,15 +18,13 @@ FROM node:16-bullseye-slim
 LABEL Author="Nanahira <nanahira@momobako.com>"
 
 # Install dependencies for building and running
-# git is needed for premake to clone dependencies
-# libcurl4-openssl-dev and libsqlite3-dev are needed for linking
 RUN apt update && \
     env DEBIAN_FRONTEND=noninteractive apt install -y \
         wget git build-essential p7zip-full python3 python-is-python3 \
         libevent-dev libsqlite3-dev liblua5.3-dev libcurl4-openssl-dev && \
     rm -rf /var/lib/apt/lists/*
 
-# Copy application source and install node modules
+# Copy application source (including our master premake5.lua) and install node modules
 COPY . /ygopro-server
 WORKDIR /ygopro-server
 RUN npm ci && \
@@ -36,38 +34,28 @@ RUN npm ci && \
 COPY --from=premake-builder /usr/src/premake/bin/release/premake5 /usr/bin/premake5
 
 # Clone and build the ygopro server component
-# The logic is now much cleaner
 RUN git clone --branch=server --recursive --depth=1 https://github.com/GuangDai/ygopro && \
     cd ygopro && \
     git submodule foreach git checkout master && \
     #
     # ===================================================================
-    # **核心改变**：直接调用 premake5，所有依赖管理和配置都在 premake5.lua 内部完成。
-    # --with-lua-curl: 触发克隆和构建 lua-cURLv3
-    # --with-lua-sqlite: 触发克隆和构建 lsqlite3
-    # --lua-deb: 使用系统提供的 Lua 5.3 开发库
+    # **关键修复**: 从父目录 (`../`) 复制我们自己的 premake5.lua 到当前目录 (`.`)，
+    # 覆盖掉刚克隆下来的版本。
     # ===================================================================
+    cp ../premake5.lua . && \
+    #
+    # 现在 premake5 会加载正确的文件，并识别我们的自定义选项。
     premake5 gmake --with-lua-curl --with-lua-sqlite --lua-deb && \
     #
     cd build && \
-    #
-    # ===================================================================
-    # **关键修改**：添加 CXXFLAGS 参数来确保 CPU 兼容性。
-    # -march=x86-64 指示编译器为通用的 64 位架构生成代码，
-    # 这样可以避免在不支持高级指令集（如 AVX2）的旧 CPU 上
-    # 出现 "Illegal instruction" (非法指令) 错误。
-    # -O2 是一个标准的、安全的优化等级。
-    # ===================================================================
     make CXXFLAGS="-O2 -march=x86-64" config=release -j$(nproc) && \
-    #
     cd .. && \
     mv ./bin/release/ygopro . && \
     strip ygopro && \
     mkdir replay expansions && \
     #
-    # Clean up unnecessary files to reduce image size
-    # Now we also remove the cloned dependency source folders
-    rm -rf .git* bin obj build ocgcore cmake lua premake* sound textures .travis.yml *.txt appveyor.yml LICENSE README.md *.lua strings.conf system.conf ../lua-cURLv3 ../lsqlite3 && \
+    # **清理路径修正**: 删除的依赖文件夹现在位于当前目录，而不是父目录。
+    rm -rf .git* bin obj build ocgcore cmake lua premake* sound textures .travis.yml *.txt appveyor.yml LICENSE README.md *.lua strings.conf system.conf lua-cURLv3 lsqlite3 && \
     ls gframe | sed '/game.cpp/d' | xargs -I {} rm -rf gframe/{}
 
 

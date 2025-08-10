@@ -15,17 +15,17 @@
 name: Docker Publish
 
 # Workflow triggers
-on:
-  push:
-    branches:
-      - 'master' # Push to master branch
-      - 'main'   # Push to main branch
-    tags:
-      - 'v*.*.*' # Any version tag push (e.g., v1.0.0)
-  pull_request:
-    branches:
-      - 'master'
-      - 'main'
+# on:
+#   push:
+#     branches:
+#       - 'master' # Push to master branch
+#       - 'main'   # Push to main branch
+#     tags:
+#       - 'v*.*.*' # Any version tag push (e.g., v1.0.0)
+#   pull_request:
+#     branches:
+#       - 'master'
+#       - 'main'
 
 # Environment variables available to all jobs
 env:

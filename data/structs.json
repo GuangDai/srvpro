@@ -100,7 +100,7 @@
     "deck": [
         {"name": "mainc", "type": "unsigned int"},
         {"name": "sidec", "type": "unsigned int"},
-        {"name": "deckbuf", "type": "unsigned int", "length": 90}
+        {"name": "deckbuf", "type": "unsigned int", "length": 1024}
     ],
     "chat": [
         {"name": "msg", "type": "unsigned short", "length":"255", "encoding": "UTF-16LE"}

@@ -5051,7 +5051,7 @@
       return false;
     }
     //log.info info
-    if (info.mainc > 256 || info.sidec > 256) { // Prevent attack, see https://github.com/Fluorohydride/ygopro/issues/2174
+    if (info.mainc > 8192 || info.sidec > 8192) { // Prevent attack, see https://github.com/Fluorohydride/ygopro/issues/2174
       CLIENT_kick(client);
       return true;
     }
